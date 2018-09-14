@@ -82,6 +82,10 @@ allprojects {
             name = 'Dmulloy2 Repo'
             url = 'http://repo.dmulloy2.net/content/groups/public/'
         }
+        maven {
+            name = 'Enigmar Repo'
+            url = 'https://repository.enigmar.de'
+        }
     }
 
     dependencies {

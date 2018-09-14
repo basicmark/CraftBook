@@ -124,12 +124,21 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
             p = (Player) event.getViewers().get(0);
             lp = CraftBookPlugin.inst().wrapPlayer(p);
         } catch(Exception e){}
+        boolean blockNonadvancedRecipe = false;
+        boolean overrideOutput = false;
         CraftBookPlugin.logDebugMessage("Pre-Crafting has been initiated!", "advanced-data");
         try {
             boolean hasFailed = false;
             for(Entry<Recipe, RecipeManager.Recipe> recipeRecipeEntry : advancedRecipes.entrySet()) {
+                Boolean earlyCheckPass = false;
 
-                if(ItemUtil.areRecipesIdentical(recipeRecipeEntry.getKey(), event.getRecipe())) {
+                if (recipeRecipeEntry.getValue().hasAdvancedData("tool-recipe")) {
+                    earlyCheckPass = true;
+                    CraftBookPlugin.logDebugMessage("Tool recipe found! Skipping identical check.", "advanced-data");
+                } else {
+                    earlyCheckPass = ItemUtil.areRecipesIdentical(recipeRecipeEntry.getKey(), event.getRecipe());
+                }
+                if(earlyCheckPass) {
 
                     thisrecipe: {
                     RecipeManager.Recipe recipe = recipeRecipeEntry.getValue();
@@ -138,10 +147,29 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
                     CraftingItemStack[] tests2;
                     if(recipe.getType() == RecipeType.SHAPED) {
                         List<CraftingItemStack> stacks = new ArrayList<>();
+                        LinkedHashMap<CraftingItemStack, Character> toCheck = recipe.getShapedIngredients();
+                        String shape[] = recipe.getShape();
 
-                        for(String s : recipe.getShape())
+                        if (recipe.hasAdvancedData("tool-recipe")) {
+                            /*
+                             * Remove the tools from the item stacks to check, that check happens later
+                             * as first we need to determine if the recipe is a potential tool recipe.
+                             */
+                            String toolShape[] = recipe.getToolsShape();
+
+                            for (int x = 0; x < toolShape.length; x++) {
+                                for (int y = 0; y < toolShape[y].length(); y++) {
+                                    Bukkit.getLogger().info("(" + x + "," + y + ") : Char = " + toolShape[x].charAt(y) + ", test[" + ((x * 3) + y) + "] = " + tests[(x * 3) + y]);
+                                    if (toolShape[x].charAt(y) != ' ') {
+                                        tests[(x * 3) + y] = null;
+                                    }
+                                }
+                            }
+                        }
+
+                        for(String s : shape)
                             for(char c : s.toCharArray())
-                                for(Entry<CraftingItemStack, Character> entry : recipe.getShapedIngredients().entrySet())
+                                for(Entry<CraftingItemStack, Character> entry : toCheck.entrySet())
                                     if(entry.getValue() == c)
                                         stacks.add(entry.getKey());
                         tests2 = stacks.toArray(new CraftingItemStack[stacks.size()]);
@@ -150,6 +178,9 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
 
                     ArrayList<ItemStack> leftovers = new ArrayList<>(Arrays.asList(tests));
                     leftovers.removeAll(Collections.singleton(null));
+
+                    if (tests2.length != leftovers.size())
+                        continue;
 
                     for(ItemStack it : tests) {
 
@@ -179,6 +210,78 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
                     if(!leftovers.isEmpty())
                         continue;
 
+                    CraftBookPlugin.logDebugMessage("No leftovers.", "advanced-data");
+
+                    /*
+                     * Tool recipes have a second stage as the recipe is registered with the server without the
+                     * tool(s) in the shape to avoid them being consumed, this means we need to check if they
+                     * are *not* present and if so void the match.
+                     */
+                    if (recipe.hasAdvancedData("tool-recipe")) {
+                        tests = ((CraftingInventory)event.getView().getTopInventory()).getMatrix();
+                        /* The recipe without the tool matched so block the result if we fail the tool match */
+                        CraftBookPlugin.logDebugMessage("Phase 2 of tool recipe.", "advanced-data");
+                        blockNonadvancedRecipe |= true;
+                        if(recipe.getType() == RecipeType.SHAPED) {
+                            CraftBookPlugin.logDebugMessage("Phase 2 of shaped tool recipe.", "advanced-data");
+                            List<CraftingItemStack> stacks = new ArrayList<>();
+                            LinkedHashMap<CraftingItemStack, Character> toCheck = recipe.getShapedTools();
+                            String shape[] = recipe.getToolsShape();
+                            String indreadientShape[] = recipe.getShape();
+
+                            for (int x = 0; x < indreadientShape.length; x++) {
+                                for (int y = 0; y < indreadientShape[y].length(); y++) {
+                                    Bukkit.getLogger().info("(" + x + "," + y + ") : Char = " + indreadientShape[x].charAt(y) + ", test[" + ((x * 3) + y) + "] = " + tests[(x * 3) + y]);
+                                    if (indreadientShape[x].charAt(y) != ' ') {
+                                        tests[(x * 3) + y] = null;
+                                    }
+                                }
+                            }
+
+                            for (String s : shape)
+                                for (char c : s.toCharArray())
+                                    for (Entry<CraftingItemStack, Character> entry : toCheck.entrySet())
+                                        if (entry.getValue() == c)
+                                            stacks.add(entry.getKey());
+                            tests2 = stacks.toArray(new CraftingItemStack[stacks.size()]);
+                            CraftBookPlugin.logDebugMessage("Tool(s) found = " + tests2.length, "advanced-data");
+
+                            ArrayList<ItemStack> toolLeftovers = new ArrayList<>(Arrays.asList(tests));
+                            toolLeftovers.removeAll(Collections.singleton(null));
+
+                            if (tests2.length != toolLeftovers.size())
+                                continue;
+
+                            for (ItemStack it : tests) {
+                                if (!ItemUtil.isStackValid(it)) {
+                                    if (it != null) {
+                                        CraftBookPlugin.logDebugMessage("Invalid item in recipe: " +
+                                                MoreObjects.toStringHelper(it).toString(), "advanced-data");
+                                    }
+                                    continue;
+                                }
+                                for (CraftingItemStack cit : tests2) {
+                                    if (ItemUtil.areBaseItemsIdentical(cit.getItemStack(), it)) {
+                                        CraftBookPlugin.logDebugMessage("Recipe base item is correct!", "advanced-data");
+                                        if (ItemUtil.areItemsIdentical(cit.getItemStack(), it)) {
+                                            toolLeftovers.remove(it);
+                                            CraftBookPlugin.logDebugMessage("MetaData is correct!", "advanced-data");
+                                        } else {
+                                            CraftBookPlugin.logDebugMessage("MetaData is incorrect!", "advanced-data");
+                                            hasFailed = true;
+                                            break thisrecipe;
+                                        }
+                                    }
+                                }
+                            }
+                            CraftBookPlugin.logDebugMessage("Tool(s) leftover  = " + toolLeftovers.size(), "advanced-data");
+                            if(!toolLeftovers.isEmpty())
+                                continue;
+
+                            overrideOutput = true;
+                        }
+                    }
+
                     hasFailed = false;
 
                     if(p != null && recipe.hasAdvancedData("permission-node")) {
@@ -194,7 +297,8 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
                     }
 
                     CraftBookPlugin.logDebugMessage("A recipe with custom data is being crafted!", "advanced-data");
-                    bits = applyAdvancedEffects(event.getRecipe().getResult(), recipeRecipeEntry.getKey(), p);
+
+                    bits = applyAdvancedEffects(recipe.getResult().getItemStack(), recipe, p);
                     break;
                 }
                 }
@@ -209,7 +313,17 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
             ((CraftingInventory)event.getView().getTopInventory()).setResult(null);
             return;
         }
-        if(bits != null && !bits.equals(event.getRecipe().getResult())) {
+
+        /*
+         * Tool based recipes don't register the tools in their shape so they don't get consumed
+         * but this means they will match in minecrafts crafting manager when tools are not
+         * present so here clear the result if that happened.
+         */
+        if (blockNonadvancedRecipe && (bits == null)) {
+            ((CraftingInventory)event.getView().getTopInventory()).setResult(null);
+        } else if (overrideOutput) {
+            ((CraftingInventory)event.getView().getTopInventory()).setResult(bits);
+        } else if(bits != null && !bits.equals(event.getRecipe().getResult())) {
             bits.setAmount(((CraftingInventory)event.getView().getTopInventory()).getResult().getAmount());
             ((CraftingInventory)event.getView().getTopInventory()).setResult(bits);
         }
@@ -281,7 +395,7 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
                         continue;
 
                     CraftBookPlugin.logDebugMessage("A recipe with custom data is being smelted!", "advanced-data");
-                    bits = applyAdvancedEffects(event.getResult(), recipeRecipeEntry.getKey(), null);
+                    bits = applyAdvancedEffects(event.getResult(), recipe, null);
                     break;
                 }
             } catch(InvalidCraftingException e){
@@ -309,7 +423,7 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
                 CraftBookPlugin.logDebugMessage("A recipe with custom data is being crafted!", "advanced-data");
                 RecipeManager.Recipe recipe = recipeRecipeEntry.getValue();
                 applyPostData(recipe, p, event);
-                event.setCurrentItem(applyAdvancedEffects(event.getCurrentItem(), event.getRecipe(), (Player) event.getWhoClicked()));
+                event.setCurrentItem(applyAdvancedEffects(event.getCurrentItem(), recipe, (Player) event.getWhoClicked()));
                 break;
             }
         }
@@ -366,14 +480,14 @@ public class CustomCrafting extends AbstractCraftBookMechanic {
     public static ItemStack craftItem(Recipe recipe) {
         for(Recipe rec : advancedRecipes.keySet()) {
             if(ItemUtil.areRecipesIdentical(rec, recipe))
-                return applyAdvancedEffects(recipe.getResult(),rec, null);
+                return applyAdvancedEffects(recipe.getResult(),advancedRecipes.get(rec), null);
         }
 
         return recipe.getResult();
     }
 
-    private static ItemStack applyAdvancedEffects(ItemStack stack, Recipe rep, Player player) {
-        RecipeManager.Recipe recipe = advancedRecipes.get(rep);
+    private static ItemStack applyAdvancedEffects(ItemStack stack, RecipeManager.Recipe recipe, Player player) {
+        //RecipeManager.Recipe recipe = advancedRecipes.get(rep);
 
         if(recipe == null)
             return stack;

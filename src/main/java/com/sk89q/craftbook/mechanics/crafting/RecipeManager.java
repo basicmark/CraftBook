@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.*;
 
 import com.sk89q.craftbook.bukkit.util.CraftBookBukkitUtil;
+import org.apache.commons.lang.ArrayUtils;
+import org.bukkit.Bukkit;
 import org.bukkit.inventory.ItemStack;
 
 import com.sk89q.craftbook.bukkit.CraftBookPlugin;
@@ -117,6 +119,9 @@ public class RecipeManager {
         private LinkedHashMap<CraftingItemStack, Character> items;
         private CraftingItemStack result;
         private List<String> shape;
+        private LinkedHashMap<CraftingItemStack, Character> tools;
+        private List<String> toolsShape;
+        private List<String> shapeRaw;
 
         @Override
         public boolean equals(Object o) {
@@ -227,6 +232,8 @@ public class RecipeManager {
         }
 
         private void load() throws InvalidCraftingException {
+            CraftBookPlugin.logDebugMessage("Loading recipe: " + id, "advanced-data");
+            Bukkit.getLogger().info("Loading recipe: " + id);
             type = RecipeType.getTypeFromName(config.getString("crafting-recipes." + id + ".type"));
             if (type != RecipeType.SHAPED) {
                 ingredients = getItems("crafting-recipes." + id + ".ingredients");
@@ -266,6 +273,39 @@ public class RecipeManager {
                         addAdvancedData("commands-player", config.getStringList("crafting-recipes." + id + ".craft-actions." + s, new ArrayList<>()));
                 }
             }
+            if (config.getKeys("crafting-recipes." + id + ".tools") != null) {
+                CraftBookPlugin.logDebugMessage("Found tools in recipe!", "advanced-data");
+                if (type == RecipeType.SHAPED) {
+                    /* TODO: having 3 copies of the shape is not great. Maybe store the shape with both items and tools and modify the getters to create on the fly? */
+                    tools = getShapeIngredients("crafting-recipes." + id + ".tools");
+                    toolsShape =  new ArrayList<String>();
+                    toolsShape.addAll(shape);
+                    shapeRaw = new ArrayList<String>();
+                    shapeRaw.addAll(shape);
+                    String itemChars = new String(ArrayUtils.toPrimitive(items.values().toArray(new Character[0])));
+                    String toolChars = new String(ArrayUtils.toPrimitive(tools.values().toArray(new Character[0])));
+
+                    /* Take the recipe shape and split out the items and the tools */
+                    for (int i = 0; i<toolsShape.size(); i++) {
+                        shape.set(i,shape.get(i).replaceAll("[" + toolChars + "]{1}", " "));
+                        toolsShape.set(i,toolsShape.get(i).replaceAll("[" + itemChars + "]{1}", " "));
+                    }
+
+                    Bukkit.getLogger().info("Tool shape");
+                    for (String line : toolsShape) {
+                        Bukkit.getLogger().info(line);
+                    }
+                    Bukkit.getLogger().info("Ingreadents shape");
+                    for (String line : shape) {
+                        Bukkit.getLogger().info(line);
+                    }
+
+                    addAdvancedData("tool-recipe", true);
+                }
+            } else {
+                tools = null;
+                toolsShape = null;
+            }
         }
 
         @SuppressWarnings("unchecked")
@@ -283,7 +323,11 @@ public class RecipeManager {
                 for(Map.Entry<CraftingItemStack, Character> craftingItemStackCharacterEntry : items.entrySet())
                     resz.put(craftingItemStackCharacterEntry.getKey().toString() + ' ', craftingItemStackCharacterEntry.getValue());
                 config.setProperty("crafting-recipes." + id + ".ingredients", resz);
-                config.setProperty("crafting-recipes." + id + ".shape", shape);
+                if (tools != null) {
+                    config.setProperty("crafting-recipes." + id + ".shape", shapeRaw);
+                } else {
+                    config.setProperty("crafting-recipes." + id + ".shape", shape);
+                }
             }
 
             LinkedHashMap<String, Integer> resz = new LinkedHashMap<>();
@@ -306,6 +350,12 @@ public class RecipeManager {
                     config.setProperty("crafting-recipes." + id + ".craft-actions.commands-player", getAdvancedData("commands-player"));
                 if(hasAdvancedData("commands-console"))
                     config.setProperty("crafting-recipes." + id + ".craft-actions.commands-console", getAdvancedData("commands-console"));
+            }
+            if (tools != null) {
+                LinkedHashMap<String, Character> resz2 = new LinkedHashMap<>();
+                for(Map.Entry<CraftingItemStack, Character> craftingItemStackCharacterEntry : tools.entrySet())
+                    resz2.put(craftingItemStackCharacterEntry.getKey().toString() + ' ', craftingItemStackCharacterEntry.getValue());
+                config.setProperty("crafting-recipes." + id + ".tools", resz2);
             }
         }
 
@@ -370,8 +420,26 @@ public class RecipeManager {
             return shape.toArray(new String[shape.size()]);
         }
 
+        public String[] getToolsShape() {
+            if (toolsShape != null) {
+                return toolsShape.toArray(new String[toolsShape.size()]);
+            }
+            return null;
+        }
+
+        public String[] getRawShape() {
+            if (toolsShape != null) {
+                return shapeRaw.toArray(new String[shapeRaw.size()]);
+            }
+            return null;
+        }
+
         public LinkedHashMap<CraftingItemStack, Character> getShapedIngredients() {
             return items;
+        }
+
+        public LinkedHashMap<CraftingItemStack, Character> getShapedTools() {
+            return tools;
         }
 
         public CraftingItemStack getResult() {
